@@ -13,6 +13,7 @@ const AuraPointsSchema = new Schema({
     points: { type: Number, required: true },
     poll_id: { type: String, required: true, ref: 'Poll' },
     post_id: { type: String, required: true, ref: 'RedditPost' },
+    voter: { type: String, required: true },
     date: { type: Date, required: true },
 })
 

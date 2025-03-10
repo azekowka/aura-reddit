@@ -27,6 +27,32 @@ const reddit_router = new Hono()
 reddit_router.get('/:username', async (c) => {
     const username = c.req.param("username")
 
+    const user = await RedditUser.findOne({
+        username: username
+    })
+
+    if (!user){
+        return c.json({'message':'no user found'})
+    }
+
+    const posts = await RedditPost.find({
+            user_id: user._id
+        })
+        .sort({ created_at: -1 })
+        .populate({
+            path: 'user_id',
+            model: RedditUser,
+            select: 'username pfp'
+        })
+        .exec()
+
+    return c.json(posts)
+})
+
+    
+reddit_router.get('/new/:username', async (c) => {
+    const username = c.req.param("username")
+
     let user = await RedditUser.findOne({ username: username })
     if (!user) {
         const user_details = await axios.get(`https://www.reddit.com/user/${username}/about.json`)
@@ -44,11 +70,11 @@ reddit_router.get('/:username', async (c) => {
         return c.json({'message':'no user found'})
     }
 
-    // let lastSeenPostDate = null 
-    // const lastSeenPost = await LastSeenUserPost.findOne({ user_id: user._id }) 
-    // if (lastSeenPost) {
-    //     lastSeenPostDate = lastSeenPost.date
-    // }
+    let lastSeenPostDate = null 
+    const lastSeenPost = await LastSeenUserPost.findOne({ user_id: user._id }) 
+    if (lastSeenPost) {
+        lastSeenPostDate = lastSeenPost.date
+    }
 
     const activity = await axios.get(`https://www.reddit.com/user/${username}.json`)
 
@@ -59,10 +85,10 @@ reddit_router.get('/:username', async (c) => {
             
             const created_at = new Date(post.data.created_utc * 1000)
             
-            // if (lastSeenPostDate && created_at <= lastSeenPostDate) {
-            //     acc.stopped = true;
-            //     return acc;
-            // }
+            if (lastSeenPostDate && created_at <= lastSeenPostDate) {
+                acc.stopped = true;
+                return acc;
+            }
             
             acc.posts.push({
                 user_id: user && user._id as string || "not_found",
@@ -78,24 +104,28 @@ reddit_router.get('/:username', async (c) => {
             return acc;
         }, { posts: [], stopped: false });
 
+    if (posts.length === 0){
+        return c.json({'message':'no new posts found'})
+    }
+
     const completion = await openai.chat.completions.create({
         messages: [
             { 
                 role: "system", 
-                content: "You are a helpful reddit assistant. Your task is to determine which aura post to publish so public could give aura points for the user. The post should be the most controversial and interesting to judge person for. You are given the posts. Return title of post with the most controversial content. If no controversial then the most cringe one. Dont return any other text- title only" 
+                content: "You are a helpful reddit assistant. Your task is to determine which aura post to publish so public could give aura points for the user. The post should be the most controversial and interesting to judge person for. You are given the posts. Return title of post with the most controversial content. If no controversial then the most cringe one. Dont return any other text- title only, without markup <title>" 
             },
             {
                 role: "user",
-                content: posts.posts.map((post: any) => post.author === post.title_author && `${post.author} is saying:\nTitle: post.title.\n Body text: + post.body` || `$${post.author} is replying to ${post.title_author} post\nTitle: ${post.title} with comment: Body:\n${post.body}`).join("\n")
+                content: posts.posts.map((post: any) => post.author === post.title_author && `- ${post.author} is saying:\n<title>${post.title}</title>.\n <body>${post.body}</body>` || `- ${post.author} is replying to ${post.title_author} post\nTitle: <title>${post.title}</title> with comment: Body:\n<body>${post.body}</body>`).join("\n")
             }
         ],
         model: "gpt-4o-mini",
         store: false,
     });
 
-    const response = completion.choices[0].message.content || ""
+    const response = completion.choices[0].message.content?.toLowerCase() || ""
 
-    const post = posts.posts.find((post: any) => post.title === response)
+    const post = posts.posts.find((post: any) => response.includes(post.title.toLowerCase()))
 
     if (!post){
         console.log(response)
@@ -113,6 +143,16 @@ reddit_router.get('/:username', async (c) => {
     })
 
     await new_post.save()
+
+    await LastSeenUserPost.findOneAndUpdate(
+        { user_id: user._id },
+        { 
+            user_id: user._id,
+            post_id: new_post._id,
+            date: post.created_at
+        },
+        { upsert: true, new: true }
+    );
     
     const populated_post = await RedditPost.findById(new_post._id)
         .populate({

@@ -1,6 +1,7 @@
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import reddit_router from './routes/reddit.js'
+import aura_router from './routes/aura.js'
 import 'dotenv/config'
 import connectDB from './db.js'
 
@@ -13,6 +14,7 @@ app.get('/', (c) => {
 })
 
 app.route('/reddit', reddit_router)
+app.route('/aura', aura_router)
 
 serve({
   fetch: app.fetch,
